@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Set debconf to noninteractive mode
+export DEBIAN_FRONTEND=noninteractive
+
+# Install jq if not available
+if ! command -v jq &> /dev/null; then
+    sudo apt update
+    sudo apt install -y jq
+fi
+
+# Function to check if a disk is formatted
+is_disk_formatted() {
+    local disk=$1
+    sudo blkid "$disk" | grep -q "TYPE=\"ext4\""
+}
+
+# Get the last two disks starting with 'sd'
+last_two_disks=($(sudo fdisk -l | grep '^Disk /dev/sd' | awk '{print $2}' | sed 's/:$//' | tail -n 2))
+
+for disk in "${last_two_disks[@]}"; do
+    echo "Processing disk: $disk"
+    
+    # Check if the disk is formatted
+    if ! is_disk_formatted "$disk"; then
+        echo "$disk is not formatted. Formatting..."
+        
+        # Create a partition and format the disk
+        yes | sudo parted "$disk" mklabel gpt
+        yes | sudo parted -a optimal "$disk" mkpart primary ext4 0% 100%
+        yes | sudo mkfs.ext4 "${disk}1"
+    else
+        echo "$disk is already formatted."
+    fi
+done
+
+# Check if /opt exists and if it needs to be moved
+if mountpoint -q "/opt"; then
+    echo "Unmounting /opt from current filesystem..."
+    sudo umount /opt
+fi
+
+# Create the mount point for the first data disk
+sudo mkdir -p /mnt/disk1
+
+# Mount the new partition on the first disk to /opt
+echo "${last_two_disks[0]}1 /opt ext4 defaults 0 2" | sudo tee -a /etc/fstab
+sudo mount "${last_two_disks[0]}1" /opt
+
+echo "Mounted ${last_two_disks[0]}1 to /opt."
+
+# Check if /var exists and if it needs to be moved
+if mountpoint -q "/var"; then
+    echo "Unmounting /var from current filesystem..."
+    sudo umount /var
+fi
+
+# Create the mount point for the second data disk
+sudo mkdir -p /mnt/disk2
+
+# Mount the new partition on the second disk to /var
+echo "${last_two_disks[1]}1 /var ext4 defaults 0 2" | sudo tee -a /etc/fstab
+sudo mount "${last_two_disks[1]}1" /var
+
+echo "Mounted ${last_two_disks[1]}1 to /var."
+echo "All operations completed successfully."
+exit 0
